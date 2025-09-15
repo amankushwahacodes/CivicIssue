@@ -8,134 +8,110 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  ActivityIndicator
 } from "react-native";
-
-// Enhanced dummy data with more realistic information
-const dummyComplaints = [
-  {
-    id: "101",
-    title: "Pothole on Main Road",
-    description: "Large pothole causing damage to vehicles near Oak Street intersection",
-    status: "Pending",
-    priority: "High",
-    category: "Roads",
-    date: "2024-03-15",
-    location: "Main Road & Oak Street",
-    lastUpdate: "2024-03-15"
-  },
-  {
-    id: "102",
-    title: "Street Light Not Working",
-    description: "Street light has been out for over a week, creating safety concerns",
-    status: "In Progress",
-    priority: "Medium",
-    category: "Utilities",
-    date: "2024-03-14",
-    location: "Pine Avenue",
-    lastUpdate: "2024-03-18"
-  },
-  {
-    id: "103",
-    title: "Garbage Collection Delay",
-    description: "Scheduled pickup missed for three consecutive days",
-    status: "Resolved",
-    priority: "Low",
-    category: "Sanitation",
-    date: "2024-03-10",
-    location: "Maple Street",
-    lastUpdate: "2024-03-20"
-  },
-  {
-    id: "104",
-    title: "Broken Water Main",
-    description: "Water flooding the street after pipe burst",
-    status: "In Progress",
-    priority: "High",
-    category: "Utilities",
-    date: "2024-03-16",
-    location: "First Avenue",
-    lastUpdate: "2024-03-17"
-  },
-  {
-    id: "105",
-    title: "Noise Complaint - Construction",
-    description: "Early morning construction noise before permitted hours",
-    status: "Pending",
-    priority: "Medium",
-    category: "Noise",
-    date: "2024-03-17",
-    location: "Second Street",
-    lastUpdate: "2024-03-17"
-  },
-];
+import apiService from "../../services/api"; // Adjust path based on your file structure
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [complaints, setComplaints] = useState(dummyComplaints);
+  const [complaints, setComplaints] = useState([]);
+  const [stats, setStats] = useState({
+    total: 0,
+    pending: 0,
+    inProgress: 0,
+    resolved: 0,
+    highPriority: 0
+  });
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("All");
-  const [sortBy, setSortBy] = useState("date"); // date, priority, status
+  const [sortBy, setSortBy] = useState("date");
+  const [error, setError] = useState(null);
 
   const statusFilters = ["All", "Pending", "In Progress", "Resolved"];
 
-  // Memoized filtered and sorted complaints
+  // Debounce search query
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedQuery(searchQuery);
-    }, 300); // delay in ms
+    }, 300);
 
     return () => {
       clearTimeout(handler);
     };
   }, [searchQuery]);
 
+  // Fetch complaints when filters change
+  useEffect(() => {
+    fetchComplaints();
+  }, [debouncedQuery, selectedFilter, sortBy]);
 
-  const filteredComplaints = useMemo(() => {
-    let filtered = complaints.filter(complaint => {
-      const matchesSearch = complaint.title.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
-        complaint.description.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
-        complaint.location.toLowerCase().includes(debouncedQuery.toLowerCase());
+  // Initial load
+  useEffect(() => {
+    checkServerHealth();
+  }, []);
 
-      const matchesFilter = selectedFilter === "All" || complaint.status === selectedFilter;
+  const checkServerHealth = async () => {
+    try {
+      await apiService.checkHealth();
+      console.log('Server is healthy');
+    } catch (error) {
+      console.warn('Server health check failed:', error.message);
+      setError('Unable to connect to server. Please check your connection.');
+    }
+  };
 
-      return matchesSearch && matchesFilter;
-    });
+  const fetchComplaints = async (showLoader = true) => {
+    try {
+      if (showLoader) setLoading(true);
+      setError(null);
 
-    // Sort complaints
-    return filtered.sort((a, b) => {
-      if (sortBy === "priority") {
-        const priorityOrder = { "High": 3, "Medium": 2, "Low": 1 };
-        return priorityOrder[b.priority as keyof typeof priorityOrder] - priorityOrder[a.priority as keyof typeof priorityOrder];
-      } else if (sortBy === "status") {
-        return a.status.localeCompare(b.status);
+      const filters = {
+        search: debouncedQuery || undefined,
+        status: selectedFilter !== "All" ? selectedFilter : undefined,
+        sortBy,
+        order: 'desc'
+      };
+
+      const response = await apiService.getComplaints(filters);
+
+      if (response.success) {
+        setComplaints(response.data);
+        setStats(response.stats);
       } else {
-        return new Date(b.date).getTime() - new Date(a.date).getTime();
+        throw new Error(response.message || 'Failed to fetch complaints');
       }
-    });
-  }, [complaints, debouncedQuery, selectedFilter, sortBy]);
-
-  // Statistics
-  const stats = useMemo(() => ({
-    total: complaints.length,
-    pending: complaints.filter(c => c.status === "Pending").length,
-    inProgress: complaints.filter(c => c.status === "In Progress").length,
-    resolved: complaints.filter(c => c.status === "Resolved").length,
-    highPriority: complaints.filter(c => c.priority === "High" && c.status !== "Resolved").length
-  }), [complaints]);
+    } catch (error) {
+      console.error('Error fetching complaints:', error);
+      setError(error.message);
+      Alert.alert(
+        "Error",
+        `Failed to load complaints: ${error.message}`,
+        [
+          { text: "Retry", onPress: () => fetchComplaints() },
+          { text: "Cancel", style: "cancel" }
+        ]
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Simulate API call
-    setTimeout(() => {
-      setRefreshing(false);
-      Alert.alert("Refreshed", "Complaint list updated!");
-    }, 1000);
-  }, []);
+    await fetchComplaints(false);
+    setRefreshing(false);
+  }, [debouncedQuery, selectedFilter, sortBy]);
 
-  const getStatusColor = useCallback((status: string) => {
+  const handleComplaintPress = useCallback((complaint) => {
+    router.push(`/track/${complaint.id}`);
+  }, [router]);
+
+  // Status and priority color helpers remain the same
+  const getStatusColor = useCallback((status) => {
     switch (status) {
       case "Pending": return "#ff9500";
       case "In Progress": return "#007aff";
@@ -144,7 +120,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const getPriorityColor = useCallback((priority: string) => {
+  const getPriorityColor = useCallback((priority) => {
     switch (priority) {
       case "High": return "#ff3b30";
       case "Medium": return "#ff9500";
@@ -153,7 +129,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const formatDate = useCallback((dateString: string) => {
+  const formatDate = useCallback((dateString) => {
     const date = new Date(dateString);
     const now = new Date();
     const diffTime = Math.abs(now.getTime() - date.getTime());
@@ -166,12 +142,19 @@ export default function HomeScreen() {
     return date.toLocaleDateString();
   }, []);
 
-  const handleComplaintPress = useCallback((complaint: any) => {
-    router.push(`/track/${complaint.id}` as any);
-  }, [router]);
+  const handleSortPress = useCallback(() => {
+    const sortOptions = ["date", "priority", "status"];
+    const currentIndex = sortOptions.indexOf(sortBy);
+    const nextIndex = (currentIndex + 1) % sortOptions.length;
+    setSortBy(sortOptions[nextIndex]);
+  }, [sortBy]);
 
-  // Memoized render functions to prevent unnecessary re-renders
-  const renderComplaintCard = useCallback(({ item }: { item: any }) => (
+  const handleClearFilters = useCallback(() => {
+    setSearchQuery("");
+    setSelectedFilter("All");
+  }, []);
+
+  const renderComplaintCard = useCallback(({ item }) => (
     <TouchableOpacity
       style={[
         styles.card,
@@ -219,7 +202,7 @@ export default function HomeScreen() {
     </TouchableOpacity>
   ), [handleComplaintPress, getPriorityColor, getStatusColor, formatDate]);
 
-  const renderFilterButton = useCallback((filter: string) => (
+  const renderFilterButton = useCallback((filter) => (
     <TouchableOpacity
       key={filter}
       style={[
@@ -246,19 +229,6 @@ export default function HomeScreen() {
     </TouchableOpacity>
   ), [selectedFilter, stats]);
 
-  const handleSortPress = useCallback(() => {
-    const sortOptions = ["date", "priority", "status"];
-    const currentIndex = sortOptions.indexOf(sortBy);
-    const nextIndex = (currentIndex + 1) % sortOptions.length;
-    setSortBy(sortOptions[nextIndex]);
-  }, [sortBy]);
-
-  const handleClearFilters = useCallback(() => {
-    setSearchQuery("");
-    setSelectedFilter("All");
-  }, []);
-
-  // Move header outside of FlatList to prevent re-renders
   const renderFixedHeader = useCallback(() => (
     <View style={styles.fixedHeaderContainer}>
       {/* Title and Stats */}
@@ -276,6 +246,16 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      {/* Connection Status */}
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>⚠️ {error}</Text>
+          <TouchableOpacity onPress={() => fetchComplaints()}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Search Bar */}
       <View style={styles.searchContainer}>
         <TextInput
@@ -284,7 +264,6 @@ export default function HomeScreen() {
           value={searchQuery}
           onChangeText={setSearchQuery}
           placeholderTextColor="#999"
-          // Key props to maintain focus
           autoComplete="off"
           autoCapitalize="none"
           autoCorrect={false}
@@ -309,7 +288,7 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
     </View>
-  ), [stats, searchQuery, statusFilters, renderFilterButton, sortBy, handleSortPress]);
+  ), [stats, searchQuery, statusFilters, renderFilterButton, sortBy, handleSortPress, error]);
 
   const renderEmptyState = useCallback(() => (
     <View style={styles.emptyContainer}>
@@ -337,15 +316,23 @@ export default function HomeScreen() {
     </View>
   ), [searchQuery, selectedFilter, handleClearFilters]);
 
-  // Key extractor to prevent unnecessary re-renders
-  const keyExtractor = useCallback((item: any) => item.id, []);
+  const renderLoadingState = () => (
+    <View style={styles.loadingContainer}>
+      <ActivityIndicator size="large" color="#007aff" />
+      <Text style={styles.loadingText}>Loading complaints...</Text>
+    </View>
+  );
 
-  // Get item layout for better performance (optional)
-  const getItemLayout = useCallback((data: any, index: number) => ({
-    length: 200, // Approximate height of each complaint card
-    offset: 200 * index,
-    index,
-  }), []);
+  const keyExtractor = useCallback((item) => item.id, []);
+
+  if (loading && complaints.length === 0) {
+    return (
+      <View style={styles.container}>
+        {renderFixedHeader()}
+        {renderLoadingState()}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -354,14 +341,14 @@ export default function HomeScreen() {
 
       {/* FlatList with only the complaint items */}
       <FlatList
-        data={filteredComplaints}
+        data={complaints}
         keyExtractor={keyExtractor}
         renderItem={renderComplaintCard}
         ListEmptyComponent={renderEmptyState}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.listContainer,
-          filteredComplaints.length === 0 && styles.emptyListContainer
+          complaints.length === 0 && styles.emptyListContainer
         ]}
         refreshControl={
           <RefreshControl
@@ -376,7 +363,6 @@ export default function HomeScreen() {
         maxToRenderPerBatch={10}
         initialNumToRender={10}
         windowSize={10}
-      // getItemLayout={getItemLayout} // Uncomment if all items have consistent height
       />
     </View>
   );
@@ -385,154 +371,177 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f5f5f5",
-  },
-  listContainer: {
-    paddingBottom: 20,
-  },
-  emptyListContainer: {
-    flexGrow: 1,
-  },
-  headerContainer: {
-    backgroundColor: "#f5f5f5",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 16,
+    backgroundColor: '#f5f5f5',
   },
   fixedHeaderContainer: {
-    backgroundColor: "#f5f5f5",
-    paddingHorizontal: 16,
-    paddingTop: 10,
+    backgroundColor: '#fff',
+    paddingTop: 60,
     paddingBottom: 16,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   titleSection: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   header: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#333",
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
     marginBottom: 8,
   },
   statsRow: {
-    flexDirection: "row",
-    gap: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
   statItem: {
     fontSize: 14,
-    color: "#666",
-    fontWeight: "500",
+    color: '#666',
   },
   statNumber: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
+    fontWeight: 'bold',
+    color: '#007aff',
   },
   urgentStat: {
-    color: "#ff3b30",
+    color: '#ff3b30',
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#ffe6e6',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ff3b30',
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#d32f2f',
+  },
+  retryText: {
+    fontSize: 14,
+    color: '#007aff',
+    fontWeight: 'bold',
   },
   searchContainer: {
-    position: "relative",
+    position: 'relative',
     marginBottom: 16,
   },
   searchInput: {
-    backgroundColor: "#fff",
+    backgroundColor: '#f8f8f8',
     borderRadius: 12,
-    padding: 14,
-    paddingRight: 45,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     fontSize: 16,
+    paddingRight: 44,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    borderColor: '#e0e0e0',
   },
   searchIcon: {
-    position: "absolute",
-    right: 15,
-    top: 15,
+    position: 'absolute',
+    right: 16,
+    top: 12,
     fontSize: 16,
   },
   filtersContainer: {
     gap: 12,
   },
   filtersRow: {
-    flexDirection: "row",
+    flexDirection: 'row',
     gap: 8,
   },
   filterButton: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: "#fff",
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
+    backgroundColor: '#f0f0f0',
     gap: 6,
   },
   activeFilterButton: {
-    backgroundColor: "#007aff",
-    borderColor: "#007aff",
+    backgroundColor: '#007aff',
   },
   filterText: {
     fontSize: 14,
-    fontWeight: "500",
-    color: "#666",
+    color: '#666',
+    fontWeight: '500',
   },
   activeFilterText: {
-    color: "#fff",
+    color: '#fff',
   },
   filterCount: {
-    backgroundColor: "rgba(255,255,255,0.3)",
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     minWidth: 20,
-    height: 20,
-    justifyContent: "center",
-    alignItems: "center",
+    alignItems: 'center',
   },
   filterCountText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#fff",
+    fontSize: 12,
+    color: '#fff',
+    fontWeight: 'bold',
   },
   sortButton: {
-    alignSelf: "flex-start",
+    alignSelf: 'flex-start',
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
+    paddingVertical: 8,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
   },
   sortButtonText: {
-    fontSize: 12,
-    color: "#007aff",
-    fontWeight: "500",
+    fontSize: 14,
+    color: '#007aff',
+    fontWeight: '500',
+  },
+  listContainer: {
+    padding: 16,
+    paddingTop: 8,
+  },
+  emptyListContainer: {
+    flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
   },
   card: {
-    backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderRadius: 12,
     padding: 16,
-    shadowColor: "#000",
+    marginBottom: 12,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
-    position: "relative",
+    borderLeftWidth: 4,
+    borderLeftColor: '#e0e0e0',
+    position: 'relative',
   },
   highPriorityCard: {
-    borderLeftWidth: 4,
-    borderLeftColor: "#ff3b30",
+    borderLeftColor: '#ff3b30',
   },
   cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: 8,
   },
   cardTitleSection: {
@@ -540,19 +549,18 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   cardTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 2,
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    marginBottom: 4,
   },
   complaintId: {
     fontSize: 12,
-    color: "#999",
-    fontWeight: "500",
+    color: '#999',
   },
   badgeContainer: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
   priorityDot: {
@@ -566,101 +574,87 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   statusText: {
-    color: "#fff",
-    fontSize: 11,
-    fontWeight: "600",
-    textTransform: "uppercase",
+    fontSize: 12,
+    color: '#fff',
+    fontWeight: 'bold',
   },
   cardDescription: {
     fontSize: 14,
-    color: "#666",
+    color: '#666',
     lineHeight: 20,
     marginBottom: 12,
   },
   cardMeta: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 12,
   },
   location: {
     fontSize: 12,
-    color: "#666",
-    flex: 1,
+    color: '#666',
   },
   category: {
     fontSize: 12,
-    color: "#007aff",
-    fontWeight: "500",
-    backgroundColor: "#f0f8ff",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
+    color: '#007aff',
+    fontWeight: '500',
   },
   cardFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   dateText: {
-    fontSize: 11,
-    color: "#999",
-    fontWeight: "500",
+    fontSize: 12,
+    color: '#999',
   },
   updateText: {
-    fontSize: 11,
-    color: "#666",
-    fontWeight: "500",
+    fontSize: 12,
+    color: '#999',
   },
   priorityIndicator: {
-    position: "absolute",
+    position: 'absolute',
     top: 0,
     right: 0,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 15,
-    borderTopWidth: 15,
-    borderLeftColor: "transparent",
-    borderTopColor: "#ff3b30",
-    borderTopRightRadius: 16,
+    width: 4,
+    height: '100%',
+    backgroundColor: '#ff3b30',
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
   },
   emptyContainer: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 32,
-    paddingTop: 60,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
   },
   emptyIcon: {
-    fontSize: 48,
+    fontSize: 64,
     marginBottom: 16,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#333",
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
     marginBottom: 8,
-    textAlign: "center",
+    textAlign: 'center',
   },
   emptySubtitle: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
-    lineHeight: 20,
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 22,
     marginBottom: 24,
   },
   clearFiltersButton: {
-    backgroundColor: "#007aff",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: '#007aff',
+    borderRadius: 8,
   },
   clearFiltersText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '500',
   },
 });
