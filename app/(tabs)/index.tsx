@@ -19,7 +19,7 @@ const dummyComplaints = [
     description: "Large pothole causing damage to vehicles near Oak Street intersection",
     status: "Pending",
     priority: "High",
-    category: "Roads",
+    category: "Roads", 
     date: "2024-03-15",
     location: "Main Road & Oak Street",
     lastUpdate: "2024-03-15"
