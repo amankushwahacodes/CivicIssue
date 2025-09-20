@@ -1,52 +1,129 @@
-// app/(tabs)/profile.tsx
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
-    Alert
+    Alert,
+    ActivityIndicator
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useState, useEffect } from "react";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import API from "../../services/api";
+
+interface UserData {
+    _id: string;
+    name: string;
+    email: string;
+    phone?: string;
+    ward?: string;
+    role: "user" | "staff" | "admin";
+}
+
+interface UserStats {
+    total: number;
+    pending: number;
+    inProgress: number;
+    resolved: number;
+}
 
 export default function ProfileScreen() {
     const router = useRouter();
+    const [userData, setUserData] = useState<UserData | null>(null);
+    const [userStats, setUserStats] = useState<UserStats | null>(null);
+    const [loading, setLoading] = useState(true);
 
-    const handleLogout = () => {
+    useEffect(() => {
+        loadUserData();
+        loadUserStats();
+    }, []);
+
+    const loadUserData = async () => {
+        try {
+            const storedUserData = await AsyncStorage.getItem('userData');
+            if (storedUserData) {
+                setUserData(JSON.parse(storedUserData));
+            }
+        } catch (error) {
+            console.error('Error loading user data:', error);
+        }
+    };
+
+    const loadUserStats = async () => {
+        try {
+            // Change this line:
+            const response = await API.get('/issues/stats/user');
+            setUserStats(response.data);
+        } catch (error) {
+            console.error('Error loading user stats:', error);
+            setUserStats({ total: 0, pending: 0, inProgress: 0, resolved: 0 });
+        } finally {
+            setLoading(false);
+        }
+    };
+    const handleLogout = async () => {
         Alert.alert(
-            "Logout",
-            "Are you sure you want to logout?",
+            "Sign Out",
+            "Are you sure you want to sign out?",
             [
                 { text: "Cancel", style: "cancel" },
                 {
-                    text: "Logout", style: "destructive", onPress: () => {
-                        // Add logout logic here
-                        console.log("User logged out");
+                    text: "Sign Out",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            await AsyncStorage.removeItem("authToken");
+                            await AsyncStorage.removeItem("userData");
+                            delete API.defaults.headers.common['Authorization'];
+                            router.replace("/auth/LoginScreen");
+                        } catch (error) {
+                            console.error("Logout error:", error);
+                            Alert.alert("Error", "Failed to sign out. Please try again.");
+                        }
                     }
                 }
             ]
         );
     };
 
-    const handleEditProfile = () => {
-        // Navigate to edit profile screen
-        router.push("/profile/edit" as any);
+    const getInitials = (name: string) => {
+        return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
     };
 
-    const handleSettings = () => {
-        // Navigate to settings screen
-        router.push("/profile/settings" as any);
+    const getRoleDisplay = (role: string) => {
+        switch (role) {
+            case 'admin': return '👑 Administrator';
+            case 'staff': return '🛡️ Staff Member';
+            case 'user': return '👤 Citizen';
+            default: return '👤 User';
+        }
     };
 
-    const handleNotifications = () => {
-        // Navigate to notifications settings
-        router.push("/profile/notifications" as any);
+    const getRoleBadgeStyle = (role: string) => {
+        switch (role) {
+            case 'admin': return { backgroundColor: '#fff5f5', borderColor: '#ff3b30' };
+            case 'staff': return { backgroundColor: '#fff8f0', borderColor: '#ff9500' };
+            default: return { backgroundColor: '#f0f8ff', borderColor: '#007aff' };
+        }
     };
 
-    const handleHelp = () => {
-        // Navigate to help screen
-        router.push("/profile/help" as any);
+    const getRoleTextStyle = (role: string) => {
+        switch (role) {
+            case 'admin': return { color: '#ff3b30' };
+            case 'staff': return { color: '#ff9500' };
+            default: return { color: '#007aff' };
+        }
     };
+
+    if (loading || !userData) {
+        return (
+            <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#007aff" />
+                <Text style={styles.loadingText}>Loading profile...</Text>
+            </View>
+        );
+    }
 
     return (
         <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -54,43 +131,54 @@ export default function ProfileScreen() {
             <View style={styles.headerSection}>
                 <View style={styles.avatarContainer}>
                     <View style={styles.avatar}>
-                        <Text style={styles.avatarText}>AM</Text>
+                        <Text style={styles.avatarText}>{getInitials(userData.name)}</Text>
                     </View>
                     <TouchableOpacity style={styles.editAvatarButton}>
                         <Text style={styles.editAvatarText}>📷</Text>
                     </TouchableOpacity>
                 </View>
-                <Text style={styles.userName}>Aman</Text>
-                <Text style={styles.userEmail}>aman@example.com</Text>
-                <View style={styles.roleBadge}>
-                    <Text style={styles.roleText}>👤 Citizen</Text>
+                <Text style={styles.userName}>{userData.name}</Text>
+                <Text style={styles.userEmail}>{userData.email}</Text>
+                {userData.phone && (
+                    <Text style={styles.userPhone}>{userData.phone}</Text>
+                )}
+                {userData.ward && (
+                    <Text style={styles.userWard}>Ward: {userData.ward}</Text>
+                )}
+                <View style={[styles.roleBadge, getRoleBadgeStyle(userData.role)]}>
+                    <Text style={[styles.roleText, getRoleTextStyle(userData.role)]}>
+                        {getRoleDisplay(userData.role)}
+                    </Text>
                 </View>
             </View>
 
             {/* Stats Section */}
-            <View style={styles.statsSection}>
-                <View style={styles.statItem}>
-                    <Text style={styles.statNumber}>12</Text>
-                    <Text style={styles.statLabel}>Complaints</Text>
+            {userStats && (
+                <View style={styles.statsSection}>
+                    <View style={styles.statItem}>
+                        <Text style={styles.statNumber}>{userStats.total}</Text>
+                        <Text style={styles.statLabel}>Total Issues</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                        <Text style={styles.statNumber}>{userStats.resolved}</Text>
+                        <Text style={styles.statLabel}>Resolved</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                        <Text style={styles.statNumber}>{userStats.pending + userStats.inProgress}</Text>
+                        <Text style={styles.statLabel}>Active</Text>
+                    </View>
                 </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                    <Text style={styles.statNumber}>8</Text>
-                    <Text style={styles.statLabel}>Resolved</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                    <Text style={styles.statNumber}>4.2</Text>
-                    <Text style={styles.statLabel}>Avg Rating</Text>
-                </View>
-            </View>
+            )}
 
             {/* Quick Actions */}
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Quick Actions</Text>
+                <Text style={styles.sectionTitle}>Account</Text>
+
                 <TouchableOpacity
                     style={styles.actionButton}
-                    onPress={handleEditProfile}
+                    onPress={() => Alert.alert("Edit Profile", "Profile editing feature coming soon!")}
                 >
                     <Text style={styles.actionIcon}>✏️</Text>
                     <View style={styles.actionContent}>
@@ -102,7 +190,19 @@ export default function ProfileScreen() {
 
                 <TouchableOpacity
                     style={styles.actionButton}
-                    onPress={handleNotifications}
+                    onPress={() => router.push("/(tabs)/" as any)}
+                >
+                    <Text style={styles.actionIcon}>📋</Text>
+                    <View style={styles.actionContent}>
+                        <Text style={styles.actionTitle}>My Issues</Text>
+                        <Text style={styles.actionSubtitle}>View all your reported issues</Text>
+                    </View>
+                    <Text style={styles.actionArrow}>›</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.actionButton}
+                    onPress={() => Alert.alert("Notifications", "Notification settings coming soon!")}
                 >
                     <Text style={styles.actionIcon}>🔔</Text>
                     <View style={styles.actionContent}>
@@ -111,31 +211,54 @@ export default function ProfileScreen() {
                     </View>
                     <Text style={styles.actionArrow}>›</Text>
                 </TouchableOpacity>
+            </View>
+
+            {/* Admin Section - Only show for admin/staff */}
+            {(userData.role === 'admin' || userData.role === 'staff') && (
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Administration</Text>
+                    <TouchableOpacity
+                        style={[styles.actionButton, styles.adminButton]}
+                        onPress={() => router.push("/admin/dashboard" as any)}
+                    >
+                        <Text style={styles.actionIcon}>🛡️</Text>
+                        <View style={styles.actionContent}>
+                            <Text style={styles.actionTitle}>
+                                {userData.role === 'admin' ? 'Admin Dashboard' : 'Staff Dashboard'}
+                            </Text>
+                            <Text style={styles.actionSubtitle}>
+                                Access {userData.role === 'admin' ? 'administrative' : 'staff'} features
+                            </Text>
+                        </View>
+                        <Text style={styles.actionArrow}>›</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {/* Settings Section */}
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Settings</Text>
 
                 <TouchableOpacity
                     style={styles.actionButton}
-                    onPress={handleSettings}
+                    onPress={() => Alert.alert("Privacy", "Privacy settings coming soon!")}
                 >
-                    <Text style={styles.actionIcon}>⚙️</Text>
+                    <Text style={styles.actionIcon}>🔒</Text>
                     <View style={styles.actionContent}>
-                        <Text style={styles.actionTitle}>Settings</Text>
-                        <Text style={styles.actionSubtitle}>App preferences and privacy</Text>
+                        <Text style={styles.actionTitle}>Privacy & Security</Text>
+                        <Text style={styles.actionSubtitle}>Manage your privacy settings</Text>
                     </View>
                     <Text style={styles.actionArrow}>›</Text>
                 </TouchableOpacity>
-            </View>
 
-            {/* Admin Section (conditional) */}
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Administration</Text>
                 <TouchableOpacity
-                    style={[styles.actionButton, styles.adminButton]}
-                    onPress={() => router.push("/admin/dashboard")}
+                    style={styles.actionButton}
+                    onPress={() => Alert.alert("Settings", "App settings coming soon!")}
                 >
-                    <Text style={styles.actionIcon}>🛡️</Text>
+                    <Text style={styles.actionIcon}>⚙️</Text>
                     <View style={styles.actionContent}>
-                        <Text style={styles.actionTitle}>Admin Dashboard</Text>
-                        <Text style={styles.actionSubtitle}>Access administrative features</Text>
+                        <Text style={styles.actionTitle}>App Settings</Text>
+                        <Text style={styles.actionSubtitle}>Customize your app experience</Text>
                     </View>
                     <Text style={styles.actionArrow}>›</Text>
                 </TouchableOpacity>
@@ -144,9 +267,10 @@ export default function ProfileScreen() {
             {/* Support Section */}
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Support</Text>
+
                 <TouchableOpacity
                     style={styles.actionButton}
-                    onPress={handleHelp}
+                    onPress={() => Alert.alert("Help", "Help & FAQ coming soon!")}
                 >
                     <Text style={styles.actionIcon}>❓</Text>
                     <View style={styles.actionContent}>
@@ -158,7 +282,7 @@ export default function ProfileScreen() {
 
                 <TouchableOpacity
                     style={styles.actionButton}
-                    onPress={() => Alert.alert("Contact", "Email: support@complaints.app")}
+                    onPress={() => Alert.alert("Contact Support", "Email: support@civicapp.com\nPhone: +91-XXXXXXXXXX")}
                 >
                     <Text style={styles.actionIcon}>📧</Text>
                     <View style={styles.actionContent}>
@@ -167,11 +291,23 @@ export default function ProfileScreen() {
                     </View>
                     <Text style={styles.actionArrow}>›</Text>
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.actionButton}
+                    onPress={() => Alert.alert("About", "Civic Issues Reporter v1.0.0\n\nA platform for reporting and tracking community issues.")}
+                >
+                    <Text style={styles.actionIcon}>ℹ️</Text>
+                    <View style={styles.actionContent}>
+                        <Text style={styles.actionTitle}>About App</Text>
+                        <Text style={styles.actionSubtitle}>App information and version</Text>
+                    </View>
+                    <Text style={styles.actionArrow}>›</Text>
+                </TouchableOpacity>
             </View>
 
             {/* Logout Button */}
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-                <Text style={styles.logoutText}>🚪 Logout</Text>
+                <Text style={styles.logoutText}>🚪 Sign Out</Text>
             </TouchableOpacity>
 
             {/* App Version */}
@@ -186,6 +322,17 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: "#f5f5f5",
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: "center",
+        alignItems: "center",
+        backgroundColor: "#f5f5f5",
+    },
+    loadingText: {
+        fontSize: 16,
+        color: "#666",
+        marginTop: 16,
     },
     headerSection: {
         backgroundColor: "#fff",
@@ -244,19 +391,26 @@ const styles = StyleSheet.create({
     userEmail: {
         fontSize: 16,
         color: "#666",
+        marginBottom: 4,
+    },
+    userPhone: {
+        fontSize: 14,
+        color: "#666",
+        marginBottom: 4,
+    },
+    userWard: {
+        fontSize: 14,
+        color: "#666",
         marginBottom: 12,
     },
     roleBadge: {
-        backgroundColor: "#f0f8ff",
         paddingHorizontal: 12,
         paddingVertical: 6,
         borderRadius: 16,
         borderWidth: 1,
-        borderColor: "#007aff",
     },
     roleText: {
         fontSize: 14,
-        color: "#007aff",
         fontWeight: "500",
     },
     statsSection: {

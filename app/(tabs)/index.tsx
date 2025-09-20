@@ -1,5 +1,7 @@
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from '@react-navigation/native';
+import API from "../../services/api"
 import {
   Alert,
   FlatList,
@@ -11,68 +13,36 @@ import {
   View
 } from "react-native";
 
-// Enhanced dummy data with more realistic information
-const dummyComplaints = [
-  {
-    id: "101",
-    title: "Pothole on Main Road",
-    description: "Large pothole causing damage to vehicles near Oak Street intersection",
-    status: "Pending",
-    priority: "High",
-    category: "Roads", 
-    date: "2024-03-15",
-    location: "Main Road & Oak Street",
-    lastUpdate: "2024-03-15"
-  },
-  {
-    id: "102",
-    title: "Street Light Not Working",
-    description: "Street light has been out for over a week, creating safety concerns",
-    status: "In Progress",
-    priority: "Medium",
-    category: "Utilities",
-    date: "2024-03-14",
-    location: "Pine Avenue",
-    lastUpdate: "2024-03-18"
-  },
-  {
-    id: "103",
-    title: "Garbage Collection Delay",
-    description: "Scheduled pickup missed for three consecutive days",
-    status: "Resolved",
-    priority: "Low",
-    category: "Sanitation",
-    date: "2024-03-10",
-    location: "Maple Street",
-    lastUpdate: "2024-03-20"
-  },
-  {
-    id: "104",
-    title: "Broken Water Main",
-    description: "Water flooding the street after pipe burst",
-    status: "In Progress",
-    priority: "High",
-    category: "Utilities",
-    date: "2024-03-16",
-    location: "First Avenue",
-    lastUpdate: "2024-03-17"
-  },
-  {
-    id: "105",
-    title: "Noise Complaint - Construction",
-    description: "Early morning construction noise before permitted hours",
-    status: "Pending",
-    priority: "Medium",
-    category: "Noise",
-    date: "2024-03-17",
-    location: "Second Street",
-    lastUpdate: "2024-03-17"
-  },
-];
+// Type definition based on your schema
+interface Issue {
+  _id: string;
+  title: string;
+  description: string;
+  category: "Roads" | "Lighting" | "Sanitation" | "Traffic" | "Water" | "Other";
+  priority: "low" | "normal" | "high" | "critical";
+  location: {
+    address: string;
+    ward?: string;
+    coordinates?: [number, number]; // [lng, lat]
+  };
+  photos: string[];
+  status: "Pending" | "In Progress" | "Resolved";
+  createdBy: string;
+  assignedTo?: string;
+  timeline: Array<{
+    status: "open" | "acknowledged" | "in_progress" | "resolved" | "closed";
+    by: string;
+    note?: string;
+    at: Date;
+  }>;
+  resolvedAt?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [complaints, setComplaints] = useState(dummyComplaints);
+  const [complaints, setComplaints] = useState<Issue[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -81,23 +51,43 @@ export default function HomeScreen() {
 
   const statusFilters = ["All", "Pending", "In Progress", "Resolved"];
 
-  // Memoized filtered and sorted complaints
+  // Debounced search query
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedQuery(searchQuery);
-    }, 300); // delay in ms
+    }, 300);
 
     return () => {
       clearTimeout(handler);
     };
   }, [searchQuery]);
 
+  const fetchComplaints = async () => {
+    try {
+      const res = await API.get("/issues/me");
+      setComplaints(res.data);
+    } catch (err: any) {
+      console.error("Error fetching complaints:", err.response?.data || err.message);
+      Alert.alert("Error", "Failed to load complaints");
+    }
+  };
+
+  useEffect(() => {
+    fetchComplaints();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchComplaints();
+    }, [])
+  );
 
   const filteredComplaints = useMemo(() => {
     let filtered = complaints.filter(complaint => {
       const matchesSearch = complaint.title.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
         complaint.description.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
-        complaint.location.toLowerCase().includes(debouncedQuery.toLowerCase());
+        complaint.location.address.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
+        (complaint.location.ward && complaint.location.ward.toLowerCase().includes(debouncedQuery.toLowerCase()));
 
       const matchesFilter = selectedFilter === "All" || complaint.status === selectedFilter;
 
@@ -107,12 +97,15 @@ export default function HomeScreen() {
     // Sort complaints
     return filtered.sort((a, b) => {
       if (sortBy === "priority") {
-        const priorityOrder = { "High": 3, "Medium": 2, "Low": 1 };
-        return priorityOrder[b.priority as keyof typeof priorityOrder] - priorityOrder[a.priority as keyof typeof priorityOrder];
+        const priorityOrder = { "critical": 4, "high": 3, "normal": 2, "low": 1 };
+        return priorityOrder[b.priority] - priorityOrder[a.priority];
       } else if (sortBy === "status") {
         return a.status.localeCompare(b.status);
       } else {
-        return new Date(b.date).getTime() - new Date(a.date).getTime();
+        // Sort by createdAt (most recent first)
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
       }
     });
   }, [complaints, debouncedQuery, selectedFilter, sortBy]);
@@ -123,16 +116,19 @@ export default function HomeScreen() {
     pending: complaints.filter(c => c.status === "Pending").length,
     inProgress: complaints.filter(c => c.status === "In Progress").length,
     resolved: complaints.filter(c => c.status === "Resolved").length,
-    highPriority: complaints.filter(c => c.priority === "High" && c.status !== "Resolved").length
+    highPriority: complaints.filter(c => (c.priority === "high" || c.priority === "critical") && c.status !== "Resolved").length
   }), [complaints]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Simulate API call
-    setTimeout(() => {
-      setRefreshing(false);
+    try {
+      await fetchComplaints();
       Alert.alert("Refreshed", "Complaint list updated!");
-    }, 1000);
+    } catch (err) {
+      Alert.alert("Error", "Failed to refresh complaints");
+    } finally {
+      setRefreshing(false);
+    }
   }, []);
 
   const getStatusColor = useCallback((status: string) => {
@@ -146,10 +142,21 @@ export default function HomeScreen() {
 
   const getPriorityColor = useCallback((priority: string) => {
     switch (priority) {
-      case "High": return "#ff3b30";
-      case "Medium": return "#ff9500";
-      case "Low": return "#34c759";
+      case "critical": return "#ff3b30";
+      case "high": return "#ff6b35";
+      case "normal": return "#ff9500";
+      case "low": return "#34c759";
       default: return "#666";
+    }
+  }, []);
+
+  const getPriorityLabel = useCallback((priority: string) => {
+    switch (priority) {
+      case "critical": return "Critical";
+      case "high": return "High";
+      case "normal": return "Normal";
+      case "low": return "Low";
+      default: return "Normal";
     }
   }, []);
 
@@ -166,16 +173,16 @@ export default function HomeScreen() {
     return date.toLocaleDateString();
   }, []);
 
-  const handleComplaintPress = useCallback((complaint: any) => {
-    router.push(`/track/${complaint.id}` as any);
+  const handleComplaintPress = useCallback((complaint: Issue) => {
+    router.push(`/track/${complaint._id}` as any);
   }, [router]);
 
   // Memoized render functions to prevent unnecessary re-renders
-  const renderComplaintCard = useCallback(({ item }: { item: any }) => (
+  const renderComplaintCard = useCallback(({ item }: { item: Issue }) => (
     <TouchableOpacity
       style={[
         styles.card,
-        item.priority === "High" && styles.highPriorityCard
+        (item.priority === "high" || item.priority === "critical") && styles.highPriorityCard
       ]}
       onPress={() => handleComplaintPress(item)}
       activeOpacity={0.7}
@@ -184,7 +191,7 @@ export default function HomeScreen() {
       <View style={styles.cardHeader}>
         <View style={styles.cardTitleSection}>
           <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
-          <Text style={styles.complaintId}>#{item.id}</Text>
+          <Text style={styles.complaintId}>#{item._id.slice(-8)}</Text>
         </View>
         <View style={styles.badgeContainer}>
           <View style={[styles.priorityDot, { backgroundColor: getPriorityColor(item.priority) }]} />
@@ -200,24 +207,35 @@ export default function HomeScreen() {
       </Text>
 
       <View style={styles.cardMeta}>
-        <Text style={styles.location}>📍 {item.location}</Text>
+        <Text style={styles.location}>📍 {item.location.address}</Text>
+        {item.location.ward && (
+          <Text style={styles.ward}>Ward: {item.location.ward}</Text>
+        )}
         <Text style={styles.category}>{item.category}</Text>
+      </View>
+
+      <View style={styles.priorityRow}>
+        <Text style={[styles.priorityText, { color: getPriorityColor(item.priority) }]}>
+          {getPriorityLabel(item.priority)} Priority
+        </Text>
       </View>
 
       {/* Card Footer */}
       <View style={styles.cardFooter}>
-        <Text style={styles.dateText}>Reported {formatDate(item.date)}</Text>
+        <Text style={styles.dateText}>
+          Reported {item.createdAt ? formatDate(item.createdAt.toString()) : 'Unknown'}
+        </Text>
         <Text style={styles.updateText}>
-          Updated {formatDate(item.lastUpdate)}
+          Updated {item.updatedAt ? formatDate(item.updatedAt.toString()) : 'Unknown'}
         </Text>
       </View>
 
       {/* Priority Indicator Bar */}
-      {item.priority === "High" && (
-        <View style={styles.priorityIndicator} />
+      {(item.priority === "high" || item.priority === "critical") && (
+        <View style={[styles.priorityIndicator, { backgroundColor: getPriorityColor(item.priority) }]} />
       )}
     </TouchableOpacity>
-  ), [handleComplaintPress, getPriorityColor, getStatusColor, formatDate]);
+  ), [handleComplaintPress, getPriorityColor, getStatusColor, getPriorityLabel, formatDate]);
 
   const renderFilterButton = useCallback((filter: string) => (
     <TouchableOpacity
@@ -263,7 +281,7 @@ export default function HomeScreen() {
     <View style={styles.fixedHeaderContainer}>
       {/* Title and Stats */}
       <View style={styles.titleSection}>
-        <Text style={styles.header}>My Complaints</Text>
+        <Text style={styles.header}>My Issues</Text>
         <View style={styles.statsRow}>
           <Text style={styles.statItem}>
             <Text style={styles.statNumber}>{stats.total}</Text> Total
@@ -280,11 +298,10 @@ export default function HomeScreen() {
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search complaints..."
+          placeholder="Search issues..."
           value={searchQuery}
           onChangeText={setSearchQuery}
           placeholderTextColor="#999"
-          // Key props to maintain focus
           autoComplete="off"
           autoCapitalize="none"
           autoCorrect={false}
@@ -316,15 +333,15 @@ export default function HomeScreen() {
       <Text style={styles.emptyIcon}>📋</Text>
       <Text style={styles.emptyTitle}>
         {searchQuery || selectedFilter !== "All"
-          ? "No matching complaints found"
-          : "No complaints yet"}
+          ? "No matching issues found"
+          : "No issues yet"}
       </Text>
       <Text style={styles.emptySubtitle}>
         {searchQuery
           ? "Try adjusting your search or filters"
           : selectedFilter !== "All"
-            ? `No ${selectedFilter.toLowerCase()} complaints found`
-            : "Tap the Report tab to submit your first complaint"}
+            ? `No ${selectedFilter.toLowerCase()} issues found`
+            : "Tap the Report tab to submit your first issue"}
       </Text>
       {(searchQuery || selectedFilter !== "All") && (
         <TouchableOpacity
@@ -338,14 +355,7 @@ export default function HomeScreen() {
   ), [searchQuery, selectedFilter, handleClearFilters]);
 
   // Key extractor to prevent unnecessary re-renders
-  const keyExtractor = useCallback((item: any) => item.id, []);
-
-  // Get item layout for better performance (optional)
-  const getItemLayout = useCallback((data: any, index: number) => ({
-    length: 200, // Approximate height of each complaint card
-    offset: 200 * index,
-    index,
-  }), []);
+  const keyExtractor = useCallback((item: Issue) => item._id, []);
 
   return (
     <View style={styles.container}>
@@ -371,12 +381,10 @@ export default function HomeScreen() {
             tintColor="#007aff"
           />
         }
-        // Performance optimizations
         removeClippedSubviews={true}
         maxToRenderPerBatch={10}
         initialNumToRender={10}
         windowSize={10}
-      // getItemLayout={getItemLayout} // Uncomment if all items have consistent height
       />
     </View>
   );
@@ -588,6 +596,11 @@ const styles = StyleSheet.create({
     color: "#666",
     flex: 1,
   },
+  ward: {
+    fontSize: 12,
+    color: "#888",
+    marginBottom: 4,
+  },
   category: {
     fontSize: 12,
     color: "#007aff",
@@ -596,6 +609,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 8,
+  },
+  priorityRow: {
+    marginBottom: 12,
+  },
+  priorityText: {
+    fontSize: 12,
+    fontWeight: "600",
   },
   cardFooter: {
     flexDirection: "row",

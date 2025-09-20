@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import {
     View,
     Text,
@@ -10,26 +11,38 @@ import {
     Platform
 } from "react-native";
 import { useState } from "react";
+import API from "../../services/api";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ReportScreen() {
+    const router = useRouter();
     const [formData, setFormData] = useState({
         title: "",
         description: "",
-        location: "",
-        category: "General",
-        priority: "Medium"
+        address: "",
+        ward: "",
+        category: "Other",
+        priority: "normal"
     });
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const categories = ["Roads", "Utilities", "Sanitation", "Public Safety", "Noise", "General"];
-    const priorities = ["Low", "Medium", "High"];
+    // Updated categories to match schema enum
+    const categories = ["Roads", "Lighting", "Sanitation", "Traffic", "Water", "Other"];
+
+    // Updated priorities to match schema enum
+    const priorities = [
+        { label: "Low", value: "low" },
+        { label: "Normal", value: "normal" },
+        { label: "High", value: "high" },
+        { label: "Critical", value: "critical" }
+    ];
 
     const validateForm = () => {
         const newErrors: Record<string, string> = {};
 
         if (!formData.title.trim()) {
-            newErrors.title = "Title is required";
+            newErrors.title = "Issue title is required";
         } else if (formData.title.length < 5) {
             newErrors.title = "Title must be at least 5 characters";
         }
@@ -40,42 +53,73 @@ export default function ReportScreen() {
             newErrors.description = "Description must be at least 10 characters";
         }
 
-        if (!formData.location.trim()) {
-            newErrors.location = "Location is required";
+        if (!formData.address.trim()) {
+            newErrors.address = "Address is required";
         }
 
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
     };
-
     const handleSubmit = async () => {
         if (!validateForm()) return;
 
         setIsSubmitting(true);
 
         try {
-            // Simulate API call
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            // Get user data for createdBy field
+            const userData = await AsyncStorage.getItem('userData');
+            const token = await AsyncStorage.getItem('authToken'); // Get token separately
 
-            // Create complaint object
-            const newComplaint = {
-                id: Date.now().toString(),
-                ...formData,
-                status: "Pending",
-                date: new Date().toISOString().split('T')[0]
+            console.log('Raw userData from storage:', userData);
+            console.log('Token from storage:', token);
+
+            const user = userData ? JSON.parse(userData) : null;
+            console.log('Parsed user:', user);
+
+            if (!user || !user._id) {
+                console.log('No user or no user._id found');
+                Alert.alert("Error", "Please log in to report issues");
+                setIsSubmitting(false);
+                return;
+            }
+
+            if (!token) {
+                Alert.alert("Error", "No authentication token found. Please log in again.");
+                setIsSubmitting(false);
+                return;
+            }
+
+            const issueData = {
+                title: formData.title.trim(),
+                description: formData.description.trim(),
+                category: formData.category,
+                priority: formData.priority,
+                location: {
+                    address: formData.address.trim(),
+                    ...(formData.ward.trim() && { ward: formData.ward.trim() })
+                },
+                photos: [],
+                status: "Pending"
             };
 
-            console.log("New complaint:", newComplaint);
+            console.log('Final issueData being sent:', JSON.stringify(issueData, null, 2));
+
+            // Don't manually add Authorization header - let the interceptor handle it
+            const response = await API.post("/issues", issueData);
+            // const response = await API.post("/issues/create", issueData);
+
+            console.log("Issue created:", response.data);
+
+            // ... rest of your success handling
 
             Alert.alert(
                 "Success! 🎉",
-                "Your complaint has been submitted successfully. You'll receive updates on its progress.",
+                "Your issue has been submitted successfully. You'll receive updates on its progress.",
                 [
                     {
-                        text: "View My Complaints",
+                        text: "View My Issues",
                         onPress: () => {
-                            // Navigate to home tab - adjust route as needed
-                            console.log("Navigate to home");
+                            router.push("/");
                         }
                     },
                     { text: "Submit Another", style: "default" }
@@ -86,19 +130,18 @@ export default function ReportScreen() {
             setFormData({
                 title: "",
                 description: "",
-                location: "",
-                category: "General",
-                priority: "Medium"
+                address: "",
+                ward: "",
+                category: "Other",
+                priority: "normal"
             });
             setErrors({});
 
-        } catch (e) {
-            console.log(e);
-            Alert.alert(
-                "Error",
-                "Failed to submit complaint. Please try again.",
-                [{ text: "OK" }]
-            );
+
+        } catch (error: any) {
+            console.error("Full error object:", error);
+            console.error("Error response:", error.response?.data);
+            // ... rest of error handling
         } finally {
             setIsSubmitting(false);
         }
@@ -112,30 +155,50 @@ export default function ReportScreen() {
         }
     };
 
-    const renderSelector = (
-        options: string[],
-        selectedValue: string,
-        onSelect: (value: string) => void,
-        title: string
-    ) => (
+    const renderCategorySelector = () => (
         <View style={styles.formGroup}>
-            <Text style={styles.label}>{title}</Text>
+            <Text style={styles.label}>Category</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorContainer}>
-                {options.map((option) => (
+                {categories.map((option) => (
                     <TouchableOpacity
                         key={option}
                         style={[
                             styles.selectorButton,
-                            selectedValue === option && styles.selectedButton,
-                            selectedValue === option && title === "Priority" && styles.prioritySelected
+                            formData.category === option && styles.selectedButton
                         ]}
-                        onPress={() => onSelect(option)}
+                        onPress={() => updateFormData("category", option)}
                     >
                         <Text style={[
                             styles.selectorText,
-                            selectedValue === option && styles.selectedText
+                            formData.category === option && styles.selectedText
                         ]}>
                             {option}
+                        </Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
+        </View>
+    );
+
+    const renderPrioritySelector = () => (
+        <View style={styles.formGroup}>
+            <Text style={styles.label}>Priority</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorContainer}>
+                {priorities.map((priority) => (
+                    <TouchableOpacity
+                        key={priority.value}
+                        style={[
+                            styles.selectorButton,
+                            formData.priority === priority.value && styles.selectedButton,
+                            formData.priority === priority.value && styles.prioritySelected
+                        ]}
+                        onPress={() => updateFormData("priority", priority.value)}
+                    >
+                        <Text style={[
+                            styles.selectorText,
+                            formData.priority === priority.value && styles.selectedText
+                        ]}>
+                            {priority.label}
                         </Text>
                     </TouchableOpacity>
                 ))}
@@ -174,28 +237,42 @@ export default function ReportScreen() {
                     <Text style={styles.charCount}>{formData.title.length}/100</Text>
                 </View>
 
-                {/* Location Field */}
+                {/* Address Field */}
                 <View style={styles.formGroup}>
                     <Text style={styles.label}>
-                        Location <Text style={styles.required}>*</Text>
+                        Address <Text style={styles.required}>*</Text>
                     </Text>
                     <TextInput
-                        style={[styles.input, errors.location && styles.inputError]}
-                        placeholder="Where is this issue located?"
-                        value={formData.location}
-                        onChangeText={(value) => updateFormData("location", value)}
-                        maxLength={100}
+                        style={[styles.input, errors.address && styles.inputError]}
+                        placeholder="Where is this issue located? (e.g., 123 Main Street)"
+                        value={formData.address}
+                        onChangeText={(value) => updateFormData("address", value)}
+                        maxLength={200}
                         autoCapitalize="words"
                         placeholderTextColor="#999"
                     />
-                    {errors.location && <Text style={styles.errorText}>⚠️ {errors.location}</Text>}
+                    {errors.address && <Text style={styles.errorText}>⚠️ {errors.address}</Text>}
+                </View>
+
+                {/* Ward Field */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.label}>Ward (Optional)</Text>
+                    <TextInput
+                        style={styles.input}
+                        placeholder="Ward number or name (if known)"
+                        value={formData.ward}
+                        onChangeText={(value) => updateFormData("ward", value)}
+                        maxLength={50}
+                        autoCapitalize="words"
+                        placeholderTextColor="#999"
+                    />
                 </View>
 
                 {/* Category Selector */}
-                {renderSelector(categories, formData.category, (value) => updateFormData("category", value), "Category")}
+                {renderCategorySelector()}
 
                 {/* Priority Selector */}
-                {renderSelector(priorities, formData.priority, (value) => updateFormData("priority", value), "Priority")}
+                {renderPrioritySelector()}
 
                 {/* Description Field */}
                 <View style={styles.formGroup}>
@@ -210,12 +287,12 @@ export default function ReportScreen() {
                         multiline
                         numberOfLines={5}
                         textAlignVertical="top"
-                        maxLength={500}
+                        maxLength={1000}
                         autoCapitalize="sentences"
                         placeholderTextColor="#999"
                     />
                     {errors.description && <Text style={styles.errorText}>⚠️ {errors.description}</Text>}
-                    <Text style={styles.charCount}>{formData.description.length}/500</Text>
+                    <Text style={styles.charCount}>{formData.description.length}/1000</Text>
                 </View>
 
                 {/* Submit Button */}
@@ -230,7 +307,7 @@ export default function ReportScreen() {
                     activeOpacity={0.8}
                 >
                     <Text style={styles.submitButtonText}>
-                        {isSubmitting ? "Submitting..." : "Submit Complaint"}
+                        {isSubmitting ? "Submitting..." : "Submit Issue"}
                     </Text>
                 </TouchableOpacity>
 
@@ -238,9 +315,10 @@ export default function ReportScreen() {
                 <View style={styles.infoCard}>
                     <Text style={styles.infoTitle}>What happens next?</Text>
                     <Text style={styles.infoText}>
-                        1. Your complaint will be reviewed within 24 hours{'\n'}
+                        1. Your issue will be reviewed within 24 hours{'\n'}
                         2. We&apos;ll assign it to the appropriate department{'\n'}
-                        3. You&apos;ll receive updates as we work to resolve it
+                        3. You&apos;ll receive updates as we work to resolve it{'\n'}
+                        4. You can track progress in the &quot;My Issues&quot; tab
                     </Text>
                 </View>
 
