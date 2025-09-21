@@ -8,11 +8,19 @@ import {
     Alert,
     ScrollView,
     KeyboardAvoidingView,
-    Platform
+    Platform, Image
 } from "react-native";
 import { useState } from "react";
 import API from "../../services/api";
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+
+// Add this interface before your component
+interface SelectedPhoto {
+    uri: string;
+    type: string;
+    fileName?: string;
+}
 
 export default function ReportScreen() {
     const router = useRouter();
@@ -29,6 +37,7 @@ export default function ReportScreen() {
 
     // Updated categories to match schema enum
     const categories = ["Roads", "Lighting", "Sanitation", "Traffic", "Water", "Other"];
+    const [selectedPhotos, setSelectedPhotos] = useState<SelectedPhoto[]>([]);
 
     // Updated priorities to match schema enum
     const priorities = [
@@ -60,6 +69,73 @@ export default function ReportScreen() {
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
     };
+
+    const handlePhotoSelect = () => {
+        Alert.alert(
+            "Select Photo",
+            "Choose an option",
+            [
+                { text: "Camera", onPress: () => openCamera() },
+                { text: "Gallery", onPress: () => openGallery() },
+                { text: "Cancel", style: "cancel" }
+            ]
+        );
+    };
+
+    const openCamera = async () => {
+        const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+
+        if (permissionResult.granted === false) {
+            Alert.alert("Permission Required", "Camera access is needed to take photos.");
+            return;
+        }
+
+        const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            aspect: [4, 3],
+            quality: 0.7,
+        });
+
+        if (!result.canceled) {
+            const newPhoto = {
+                uri: result.assets[0].uri,
+                type: 'image/jpeg',
+                fileName: `photo_${Date.now()}.jpg`
+            };
+            setSelectedPhotos(prev => [...prev, newPhoto].slice(0, 5));
+        }
+    };
+
+    const openGallery = async () => {
+        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+        if (permissionResult.granted === false) {
+            Alert.alert("Permission Required", "Gallery access is needed to select photos.");
+            return;
+        }
+
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsMultipleSelection: true,
+            selectionLimit: 5,
+            quality: 0.7,
+        });
+
+        if (!result.canceled) {
+            const newPhotos = result.assets.map((asset, index) => ({
+                uri: asset.uri,
+                type: 'image/jpeg',
+                fileName: asset.fileName || `photo_${Date.now()}_${index}.jpg`
+            }));
+            setSelectedPhotos(prev => [...prev, ...newPhotos].slice(0, 5));
+        }
+    };
+
+    const removePhoto = (index: number) => {
+        setSelectedPhotos(prev => prev.filter((_, i) => i !== index));
+    };
+    
     const handleSubmit = async () => {
         if (!validateForm()) return;
 
@@ -68,7 +144,7 @@ export default function ReportScreen() {
         try {
             // Get user data for createdBy field
             const userData = await AsyncStorage.getItem('userData');
-            const token = await AsyncStorage.getItem('authToken'); // Get token separately
+            const token = await AsyncStorage.getItem('authToken');
 
             console.log('Raw userData from storage:', userData);
             console.log('Token from storage:', token);
@@ -89,28 +165,38 @@ export default function ReportScreen() {
                 return;
             }
 
-            const issueData = {
-                title: formData.title.trim(),
-                description: formData.description.trim(),
-                category: formData.category,
-                priority: formData.priority,
-                location: {
-                    address: formData.address.trim(),
-                    ...(formData.ward.trim() && { ward: formData.ward.trim() })
+            // Create FormData instead of JSON object
+            const formDataToSend = new FormData();
+            formDataToSend.append('title', formData.title.trim());
+            formDataToSend.append('description', formData.description.trim());
+            formDataToSend.append('category', formData.category);
+            formDataToSend.append('priority', formData.priority);
+
+            // Stringify location object for FormData
+            formDataToSend.append('location', JSON.stringify({
+                address: formData.address.trim(),
+                ...(formData.ward.trim() && { ward: formData.ward.trim() })
+            }));
+
+            // Add photos to FormData
+            selectedPhotos.forEach((photo, index) => {
+                formDataToSend.append('photos', {
+                    uri: photo.uri,
+                    type: photo.type,
+                    name: photo.fileName || `photo_${index}.jpg`,
+                } as any);
+            });
+
+            console.log('Sending FormData with photos:', selectedPhotos.length, 'photos');
+
+            // Send FormData with multipart/form-data header
+            const response = await API.post("/issues", formDataToSend, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
                 },
-                photos: [],
-                status: "Pending"
-            };
-
-            console.log('Final issueData being sent:', JSON.stringify(issueData, null, 2));
-
-            // Don't manually add Authorization header - let the interceptor handle it
-            const response = await API.post("/issues", issueData);
-            // const response = await API.post("/issues/create", issueData);
+            });
 
             console.log("Issue created:", response.data);
-
-            // ... rest of your success handling
 
             Alert.alert(
                 "Success! 🎉",
@@ -126,7 +212,7 @@ export default function ReportScreen() {
                 ]
             );
 
-            // Reset form
+            // Reset form including photos
             setFormData({
                 title: "",
                 description: "",
@@ -135,13 +221,15 @@ export default function ReportScreen() {
                 category: "Other",
                 priority: "normal"
             });
+            setSelectedPhotos([]); // Reset photos
             setErrors({});
-
 
         } catch (error: any) {
             console.error("Full error object:", error);
             console.error("Error response:", error.response?.data);
-            // ... rest of error handling
+
+            const errorMessage = error.response?.data?.message || "Failed to submit issue. Please try again.";
+            Alert.alert("Error", errorMessage);
         } finally {
             setIsSubmitting(false);
         }
@@ -295,6 +383,38 @@ export default function ReportScreen() {
                     <Text style={styles.charCount}>{formData.description.length}/1000</Text>
                 </View>
 
+                {/* ADD THIS: Photo Section */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.label}>Photos (Optional)</Text>
+
+                    <TouchableOpacity
+                        style={styles.photoButton}
+                        onPress={handlePhotoSelect}
+                    >
+                        <Text style={styles.photoButtonText}>📷 Add Photos</Text>
+                    </TouchableOpacity>
+
+                    {selectedPhotos.length > 0 && (
+                        <View style={styles.photoPreview}>
+                            {selectedPhotos.map((photo, index) => (
+                                <View key={index} style={styles.photoItem}>
+                                    <Image source={{ uri: photo.uri }} style={styles.photoThumbnail} />
+                                    <TouchableOpacity
+                                        style={styles.removePhotoButton}
+                                        onPress={() => removePhoto(index)}
+                                    >
+                                        <Text style={styles.removePhotoText}>×</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    <Text style={styles.photoHint}>
+                        You can add up to 5 photos to help describe the issue better.
+                    </Text>
+                </View>
+
                 {/* Submit Button */}
                 <TouchableOpacity
                     style={[
@@ -310,7 +430,6 @@ export default function ReportScreen() {
                         {isSubmitting ? "Submitting..." : "Submit Issue"}
                     </Text>
                 </TouchableOpacity>
-
                 {/* Info Card */}
                 <View style={styles.infoCard}>
                     <Text style={styles.infoTitle}>What happens next?</Text>
@@ -486,4 +605,56 @@ const styles = StyleSheet.create({
     bottomSpace: {
         height: 32,
     },
+    photoButton: {
+        borderWidth: 2,
+        borderColor: "#007aff",
+        borderStyle: "dashed",
+        borderRadius: 12,
+        padding: 20,
+        alignItems: "center",
+        backgroundColor: "#f8f9ff",
+        marginBottom: 12,
+    },
+    photoButtonText: {
+        color: "#007aff",
+        fontSize: 16,
+        fontWeight: "500",
+    },
+    photoPreview: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 10,
+        marginBottom: 12,
+    },
+    photoItem: {
+        position: "relative",
+    },
+    photoThumbnail: {
+        width: 80,
+        height: 80,
+        borderRadius: 8,
+    },
+    removePhotoButton: {
+        position: "absolute",
+        top: -5,
+        right: -5,
+        backgroundColor: "#ff3b30",
+        borderRadius: 12,
+        width: 24,
+        height: 24,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    removePhotoText: {
+        color: "#fff",
+        fontSize: 16,
+        fontWeight: "bold",
+    },
+    photoHint: {
+        fontSize: 14,
+        color: "#6c757d", // light gray
+        marginBottom: 12,
+        textAlign: "center",
+    }
+
 });

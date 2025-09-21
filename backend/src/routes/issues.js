@@ -3,17 +3,38 @@ const multer = require('multer');
 const Issue = require('../models/Issue');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const { isAdmin } = require("../middleware/authMiddleware");
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 
 const router = express.Router();
 
-// multer disk storage (MVP)
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+// Configure Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-const upload = multer({ storage });
 
+// Configure multer to use Cloudinary
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'civic-issues', // Folder name in Cloudinary
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [
+            { width: 1024, height: 1024, crop: 'limit' }, // Resize large images
+            { quality: 'auto' } // Auto optimize quality
+        ],
+    },
+});
+
+const upload = multer({
+    storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024, // 5MB limit
+    }
+});
 
 // get all issues (public)
 router.get('/', async (req, res, next) => {
@@ -55,52 +76,71 @@ router.get('/me', authMiddleware, async (req, res, next) => {
 });
 
 // create issue (citizen)
-router.post('/', authMiddleware, async (req, res, next) => {
-    console.log('=== BACKEND DETAILED DEBUG ===');
-    console.log('req.body:', req.body);
-    console.log('req.body.location:', req.body.location);
-    console.log('req.body.location.address:', req.body.location?.address);
-    console.log('req.user:', req.user);
-    console.log('req.user._id:', req.user?._id);
-    console.log('Content-Type header:', req.headers['content-type']);
+// router.post('/', authMiddleware, async (req, res, next) => {
 
+//     try {
+//         const { title, description, category, priority, location } = req.body;
+
+//         console.log('Destructured location:', location);
+//         console.log('Location type:', typeof location);
+
+//         let parsedLocation = location;
+//         if (typeof location === 'string') {
+//             try {
+//                 parsedLocation = JSON.parse(location);
+//             } catch (e) {
+//                 console.error('Invalid location JSON:', location);
+//             }
+//         }
+
+
+//         const issue = await Issue.create({
+//             title,
+//             description,
+//             category,
+//             priority,
+//             location : parsedLocation,
+//             photos: [],
+//             createdBy: req.user._id
+//         });
+
+//         res.status(201).json(issue);
+//     } catch (err) {
+//         console.error('Validation error details:', err.message);
+//         console.error('Error name:', err.name);
+//         res.status(500).json({ message: err.message });
+//     }
+// });
+
+
+router.post('/', authMiddleware, upload.array('photos', 5), async (req, res, next) => {
     try {
         const { title, description, category, priority, location } = req.body;
 
-        console.log('Destructured location:', location);
-        console.log('Location type:', typeof location);
-
         let parsedLocation = location;
         if (typeof location === 'string') {
-            try {
-                parsedLocation = JSON.parse(location);
-            } catch (e) {
-                console.error('Invalid location JSON:', location);
-            }
+            parsedLocation = JSON.parse(location);
         }
 
+        // Get Cloudinary URLs from uploaded files
+        const photos = (req.files || []).map(file => file.path); // Cloudinary URLs
 
         const issue = await Issue.create({
             title,
             description,
             category,
             priority,
-            location : parsedLocation,
-            photos: [],
+            location: parsedLocation,
+            photos,
             createdBy: req.user._id
         });
 
         res.status(201).json(issue);
     } catch (err) {
-        console.error('Validation error details:', err.message);
-        console.error('Error name:', err.name);
+        console.error('Issue creation error:', err);
         res.status(500).json({ message: err.message });
     }
 });
-
-
-
-
 
 // GET single issue by ID
 router.get('/:id', async (req, res, next) => {

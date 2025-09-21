@@ -1,16 +1,8 @@
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    TouchableOpacity,
-    Alert,
-    Dimensions,
-    ActivityIndicator
-} from "react-native";
+
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState, useEffect } from "react";
 import API from "../../services/api";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Dimensions, ActivityIndicator, Image } from "react-native";
 
 const { width } = Dimensions.get('window');
 
@@ -302,13 +294,30 @@ export default function TrackScreen() {
             )}
 
             {/* Photos Section */}
+            {/* Photos Section - Replace the existing photosCard */}
             {issueData.photos && issueData.photos.length > 0 && (
                 <View style={styles.photosCard}>
                     <Text style={styles.cardTitle}>Photos ({issueData.photos.length})</Text>
-                    <Text style={styles.photosNote}>Photos functionality will be implemented soon.</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosScroll}>
+                        {issueData.photos.map((photoUrl, index) => (
+                            <TouchableOpacity
+                                key={index}
+                                style={styles.photoContainer}
+                                onPress={() => {
+                                    // Optional: Open photo in full screen
+                                    Alert.alert("Photo", "Full screen photo viewer coming soon!");
+                                }}
+                            >
+                                <Image
+                                    source={{ uri: photoUrl }}
+                                    style={styles.issuePhoto}
+                                    resizeMode="cover"
+                                />
+                            </TouchableOpacity>
+                        ))}
+                    </ScrollView>
                 </View>
             )}
-
             {/* Action Buttons */}
             <View style={styles.actionButtons}>
                 <TouchableOpacity
@@ -587,6 +596,11 @@ const styles = StyleSheet.create({
         color: "#666",
         fontStyle: "italic",
     },
+    photosNote: {
+        fontSize: 14,
+        color: "#666",
+        fontStyle: "italic",
+    },
     photosCard: {
         backgroundColor: "#fff",
         marginHorizontal: 16,
@@ -599,10 +613,18 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 3,
     },
-    photosNote: {
-        fontSize: 14,
-        color: "#666",
-        fontStyle: "italic",
+    photosScroll: {
+        flexDirection: "row",
+    },
+    photoContainer: {
+        marginRight: 12,
+        borderRadius: 8,
+        overflow: "hidden",
+    },
+    issuePhoto: {
+        width: 120,
+        height: 120,
+        borderRadius: 8,
     },
     actionButtons: {
         flexDirection: "row",
